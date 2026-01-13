@@ -1,0 +1,14 @@
+# ===================================================================
+# requirements.txt สำหรับ Python IoT Client
+# ===================================================================
+
+requests==2.31.0
+python-dotenv==1.0.0
+
+# สำหรับ bottle_sorting_system.py (Raspberry Pi)
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# RPi.GPIO - ติดตั้งบน Raspberry Pi เท่านั้น
+# sudo pip install RPi.GPIO
