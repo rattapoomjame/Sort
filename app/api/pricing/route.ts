@@ -1,12 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
-
-// ใช้ Service Role Key สำหรับ bypass RLS
-const supabase = createClient(supabaseUrl, supabaseServiceKey || supabaseAnonKey)
+import { getPricing, supabaseAdmin } from '@/lib/supabase'
 
 // Default pricing config
 const DEFAULT_PRICING = {
@@ -22,19 +15,7 @@ const DEFAULT_PRICING = {
  */
 export async function GET() {
   try {
-    // ดึงจาก machine_settings table
-    const { data, error } = await supabase
-      .from('machine_settings')
-      .select('*')
-      .eq('key', 'pricing')
-      .single()
-
-    if (error && error.code !== 'PGRST116') {
-      console.error('Error fetching pricing:', error)
-    }
-
-    // ถ้าไม่มีข้อมูล ใช้ default
-    const pricing = data?.value || DEFAULT_PRICING
+    const pricing = await getPricing()
 
     return NextResponse.json({
       success: true,
@@ -73,7 +54,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Upsert เข้า machine_settings
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('machine_settings')
       .upsert({
         key: 'pricing',

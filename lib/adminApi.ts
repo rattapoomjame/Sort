@@ -1,4 +1,4 @@
-﻿import { supabase, supabaseAdmin } from './supabase'
+﻿import { supabaseAdmin } from './supabase'
 
 /**
  * Admin API Functions
@@ -25,7 +25,7 @@ export async function getDashboardStats() {
       .from('user_points')
       .select('points')
     
-    const totalPoints = pointsData?.reduce((sum, p) => sum + (p.points || 0), 0) || 0
+    const totalPoints = pointsData?.reduce((sum: number, p: any) => sum + (p.points || 0), 0) || 0
 
     // นับรายการรอโอนเงิน
     const { count: pendingWithdrawals } = await supabaseAdmin

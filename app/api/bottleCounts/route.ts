@@ -1,40 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+import { supabaseAdmin, getBottleCounts } from '@/lib/supabase'
 
 // GET - ดึงจำนวนขวดแต่ละประเภทจาก machine_status
 export async function GET() {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('machine_status')
-      .select('glass_count, plastic_count, can_count')
-      .eq('machine_id', 'main')
-      .single()
-
-    if (error) {
-      console.error('Error fetching bottle counts:', error)
-      // ถ้าไม่มี columns ใหม่ ให้ return ค่าเริ่มต้น
-      return NextResponse.json({
-        success: true,
-        counts: { glass: 0, plastic: 0, can: 0 },
-        total: 0
-      })
-    }
-
-    const counts = {
-      glass: data?.glass_count || 0,
-      plastic: data?.plastic_count || 0,
-      can: data?.can_count || 0
-    }
+    const counts = await getBottleCounts('main')
 
     return NextResponse.json({
       success: true,
       counts,
-      total: counts.glass + counts.plastic + counts.can
+      total: counts.total
     })
   } catch (err) {
     console.error('Error:', err)

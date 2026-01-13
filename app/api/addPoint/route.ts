@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { addPoints } from '@/lib/supabase'
-import { createClient } from '@supabase/supabase-js'
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey)
+import { addPoints, supabaseAdmin } from '@/lib/supabase'
 
 // Default pricing
 const DEFAULT_PRICING = {
