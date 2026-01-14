@@ -56,6 +56,30 @@ export interface Withdrawal {
   created_at: string
 }
 
+export interface ActivityLog {
+  id: string
+  user_id?: string
+  action: string
+  details?: any
+  ip_address?: string
+  created_at: string
+}
+
+export interface MachineStatus {
+  id: string
+  machine_id: string
+  status: string
+  cpu_temp: number
+  storage_used: number
+  bottle_count: number
+  max_bottles: number
+  glass_count?: number
+  plastic_count?: number
+  can_count?: number
+  last_heartbeat: string
+  updated_at: string
+}
+
 // ==================== User Management ====================
 
 /**
@@ -135,6 +159,128 @@ export async function registerUser(phone: string, username: string): Promise<Use
     return newUser
   } catch (error) {
     console.error('❌ Error registering user:', error)
+    throw error
+  }
+}
+
+/**
+ * ดึงข้อมูลผู้ใช้จาก ID
+ * @param user_id - ID ของผู้ใช้
+ * @returns ข้อมูลผู้ใช้ หรือ null
+ */
+export async function getUserById(user_id: string): Promise<User | null> {
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', user_id)
+      .single()
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return null
+      }
+      throw error
+    }
+
+    return data as User
+  } catch (error) {
+    console.error('❌ Error fetching user by ID:', error)
+    throw error
+  }
+}
+
+/**
+ * ดึงรายชื่อผู้ใช้ทั้งหมด (Admin only)
+ * @param limit - จำนวนผู้ใช้ที่ต้องการ
+ * @param offset - ตำแหน่งเริ่มต้น
+ * @returns array ของผู้ใช้
+ */
+export async function getAllUsers(limit: number = 50, offset: number = 0): Promise<User[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('users')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
+
+    if (error) {
+      throw error
+    }
+
+    return (data || []) as User[]
+  } catch (error) {
+    console.error('❌ Error fetching all users:', error)
+    throw error
+  }
+}
+
+/**
+ * นับจำนวนผู้ใช้ทั้งหมด
+ * @returns จำนวนผู้ใช้
+ */
+export async function getTotalUserCount(): Promise<number> {
+  try {
+    const { count, error } = await supabaseAdmin
+      .from('users')
+      .select('*', { count: 'exact', head: true })
+
+    if (error) {
+      throw error
+    }
+
+    return count || 0
+  } catch (error) {
+    console.error('❌ Error counting users:', error)
+    return 0
+  }
+}
+
+/**
+ * อัปเดตข้อมูลผู้ใช้
+ * @param user_id - ID ของผู้ใช้
+ * @param username - ชื่อผู้ใช้ใหม่
+ * @returns ข้อมูลผู้ใช้ที่อัปเดต
+ */
+export async function updateUserInfo(user_id: string, username: string): Promise<User> {
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .update({ username })
+      .eq('id', user_id)
+      .select()
+      .single()
+
+    if (error) {
+      throw error
+    }
+
+    return data as User
+  } catch (error) {
+    console.error('❌ Error updating user info:', error)
+    throw error
+  }
+}
+
+/**
+ * ลบผู้ใช้ (Admin only)
+ * @param user_id - ID ของผู้ใช้
+ * @returns boolean - สำเร็จหรือไม่
+ */
+export async function deleteUser(user_id: string): Promise<boolean> {
+  try {
+    const { error } = await supabaseAdmin
+      .from('users')
+      .delete()
+      .eq('id', user_id)
+
+    if (error) {
+      throw error
+    }
+
+    return true
+  } catch (error) {
+    console.error('❌ Error deleting user:', error)
     throw error
   }
 }
@@ -253,6 +399,131 @@ export async function updatePoints(user_id: string, points: number): Promise<Use
   }
 }
 
+/**
+ * หักแต้มจากผู้ใช้
+ * @param user_id - ID ของผู้ใช้
+ * @param points - จำนวนแต้มที่หัก
+ * @param reason - เหตุผล (optional)
+ * @returns ข้อมูลแต้มที่อัพเดต
+ */
+export async function deductPoints(
+  user_id: string,
+  points: number,
+  reason: string = 'withdrawal'
+): Promise<UserPoints> {
+  try {
+    const currentPoints = await getUserPoints(user_id)
+    
+    if (currentPoints < points) {
+      throw new Error('แต้มไม่เพียงพอในการหัก')
+    }
+
+    const newPoints = currentPoints - points
+
+    const { data, error } = await supabase
+      .from('user_points')
+      .update({
+        points: newPoints,
+        updated_at: new Date().toISOString()
+      })
+      .eq('user_id', user_id)
+      .select()
+      .single()
+
+    if (error) {
+      throw error
+    }
+
+    // บันทึกประวัติ
+    try {
+      await supabase
+        .from('point_history')
+        .insert([
+          {
+            user_id,
+            points: -points,
+            item_type: reason,
+            created_at: new Date().toISOString()
+          }
+        ])
+    } catch (err) {
+      console.warn('⚠️ Failed to log deduction history:', err)
+    }
+
+    return data as UserPoints
+  } catch (error) {
+    console.error('❌ Error deducting points:', error)
+    throw error
+  }
+}
+
+/**
+ * ดึงผู้ใช้ top N ตามแต้มสูงสุด
+ * @param limit - จำนวนผู้ใช้ที่ต้องการ (default: 10)
+ * @returns array ของผู้ใช้พร้อมแต้ม
+ */
+export async function getTopUsers(limit: number = 10): Promise<(User & { points: number })[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('user_points')
+      .select(`
+        points,
+        users (id, phone, username, created_at)
+      `)
+      .order('points', { ascending: false })
+      .limit(limit)
+
+    if (error) {
+      throw error
+    }
+
+    return (data || []).map((item: any) => ({
+      ...item.users,
+      points: item.points
+    }))
+  } catch (error) {
+    console.error('❌ Error fetching top users:', error)
+    throw error
+  }
+}
+
+/**
+ * ดึงสถิติแต้มทั้งหมด
+ * @returns object ของสถิติแต้ม
+ */
+export async function getTotalPointsStats(): Promise<{
+  totalPoints: number
+  averagePoints: number
+  maxPoints: number
+  minPoints: number
+  userCount: number
+}> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('user_points')
+      .select('points')
+
+    if (error) {
+      throw error
+    }
+
+    const points = (data || []).map((item: any) => item.points)
+    const total = points.reduce((sum: number, p: number) => sum + p, 0)
+    const count = points.length
+
+    return {
+      totalPoints: total,
+      averagePoints: count > 0 ? Math.floor(total / count) : 0,
+      maxPoints: count > 0 ? Math.max(...points) : 0,
+      minPoints: count > 0 ? Math.min(...points) : 0,
+      userCount: count
+    }
+  } catch (error) {
+    console.error('❌ Error fetching points stats:', error)
+    throw error
+  }
+}
+
 // ==================== History & Logs ====================
 
 /**
@@ -351,6 +622,234 @@ export async function getWithdrawals(user_id: string): Promise<Withdrawal[]> {
   }
 }
 
+/**
+ * ดึงข้อมูลการถอนเงินจาก ID
+ * @param withdrawal_id - ID ของการถอนเงิน
+ * @returns ข้อมูลการถอนเงิน
+ */
+export async function getWithdrawalById(withdrawal_id: string): Promise<Withdrawal | null> {
+  try {
+    const { data, error } = await supabase
+      .from('withdrawals')
+      .select('*')
+      .eq('id', withdrawal_id)
+      .single()
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return null
+      }
+      throw error
+    }
+
+    return data as Withdrawal
+  } catch (error) {
+    console.error('❌ Error fetching withdrawal by ID:', error)
+    throw error
+  }
+}
+
+/**
+ * ดึงรายการถอนเงินทั้งหมด (Admin only)
+ * @param status - สถานะการถอน (optional)
+ * @param limit - จำนวนรายการ
+ * @param offset - ตำแหน่งเริ่มต้น
+ * @returns array ของการถอนเงิน
+ */
+export async function getAllWithdrawals(
+  status?: string,
+  limit: number = 50,
+  offset: number = 0
+): Promise<Withdrawal[]> {
+  try {
+    let query = supabaseAdmin
+      .from('withdrawals')
+      .select(`
+        *,
+        users (id, username, phone)
+      `)
+
+    if (status) {
+      query = query.eq('status', status)
+    }
+
+    const { data, error } = await query
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
+
+    if (error) {
+      throw error
+    }
+
+    return (data || []) as Withdrawal[]
+  } catch (error) {
+    console.error('❌ Error fetching all withdrawals:', error)
+    throw error
+  }
+}
+
+/**
+ * อัปเดตสถานะการถอนเงิน (Admin only)
+ * @param withdrawal_id - ID ของการถอนเงิน
+ * @param status - สถานะใหม่ (pending, completed, cancelled)
+ * @param admin_note - หมายเหตุจาก Admin (optional)
+ * @returns ข้อมูลการถอนเงินที่อัปเดต
+ */
+export async function updateWithdrawalStatus(
+  withdrawal_id: string,
+  status: 'pending' | 'completed' | 'cancelled',
+  admin_note?: string
+): Promise<Withdrawal> {
+  try {
+    const updateData: any = { status }
+
+    if (status === 'completed') {
+      updateData.completed_at = new Date().toISOString()
+    }
+
+    if (admin_note) {
+      updateData.admin_note = admin_note
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('withdrawals')
+      .update(updateData)
+      .eq('id', withdrawal_id)
+      .select()
+      .single()
+
+    if (error) {
+      throw error
+    }
+
+    // บันทึก activity log
+    if (data) {
+      await logActivity(null, `withdrawal_status_updated`, {
+        withdrawal_id,
+        new_status: status,
+        note: admin_note
+      }).catch(err => console.warn('⚠️ Failed to log activity:', err))
+    }
+
+    return data as Withdrawal
+  } catch (error) {
+    console.error('❌ Error updating withdrawal status:', error)
+    throw error
+  }
+}
+
+// ==================== Activity Logging ====================
+
+/**
+ * บันทึก activity log
+ * @param user_id - ID ของผู้ใช้ (optional)
+ * @param action - ประเภท action
+ * @param details - รายละเอียด (optional)
+ * @returns boolean - สำเร็จหรือไม่
+ */
+export async function logActivity(
+  user_id: string | null,
+  action: string,
+  details?: any
+): Promise<boolean> {
+  try {
+    const { error } = await supabaseAdmin
+      .from('activity_logs')
+      .insert([
+        {
+          user_id,
+          action,
+          details: details || null,
+          created_at: new Date().toISOString()
+        }
+      ])
+
+    if (error) {
+      throw error
+    }
+
+    return true
+  } catch (error) {
+    console.error('❌ Error logging activity:', error)
+    return false
+  }
+}
+
+/**
+ * ดึง activity logs (Admin only)
+ * @param limit - จำนวนบันทึก
+ * @param offset - ตำแหน่งเริ่มต้น
+ * @returns array ของ activity logs
+ */
+export async function getActivityLogs(
+  limit: number = 50,
+  offset: number = 0
+): Promise<ActivityLog[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('activity_logs')
+      .select(`
+        *,
+        users (id, username, phone)
+      `)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
+
+    if (error) {
+      throw error
+    }
+
+    return (data || []) as ActivityLog[]
+  } catch (error) {
+    console.error('❌ Error fetching activity logs:', error)
+    throw error
+  }
+}
+
+/**
+ * ดึง activity logs ตามเงื่อนไข (Admin only)
+ * @param filter - object ของเงื่อนไข
+ * @param limit - จำนวนบันทึก
+ * @returns array ของ activity logs
+ */
+export async function getActivityLogsByFilter(
+  filter: { user_id?: string; action?: string; dateFrom?: string; dateTo?: string },
+  limit: number = 50
+): Promise<ActivityLog[]> {
+  try {
+    let query = supabaseAdmin.from('activity_logs').select('*')
+
+    if (filter.user_id) {
+      query = query.eq('user_id', filter.user_id)
+    }
+
+    if (filter.action) {
+      query = query.eq('action', filter.action)
+    }
+
+    if (filter.dateFrom) {
+      query = query.gte('created_at', filter.dateFrom)
+    }
+
+    if (filter.dateTo) {
+      query = query.lte('created_at', filter.dateTo)
+    }
+
+    const { data, error } = await query
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (error) {
+      throw error
+    }
+
+    return (data || []) as ActivityLog[]
+  } catch (error) {
+    console.error('❌ Error fetching activity logs by filter:', error)
+    throw error
+  }
+}
+
 // ==================== Pricing & Settings ====================
 
 /**
@@ -382,6 +881,39 @@ export async function getPricing(): Promise<any> {
   }
 }
 
+/**
+ * อัปเดตค่า pricing (Admin only)
+ * @param pricing - object ของราคาใหม่
+ * @returns boolean - สำเร็จหรือไม่
+ */
+export async function updatePricing(pricing: any): Promise<boolean> {
+  try {
+    const { error } = await supabaseAdmin
+      .from('machine_settings')
+      .upsert(
+        {
+          key: 'pricing',
+          value: pricing,
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: 'key' }
+      )
+
+    if (error) {
+      throw error
+    }
+
+    // บันทึก activity log
+    await logActivity(null, 'pricing_updated', { new_pricing: pricing })
+      .catch(err => console.warn('⚠️ Failed to log activity:', err))
+
+    return true
+  } catch (error) {
+    console.error('❌ Error updating pricing:', error)
+    throw error
+  }
+}
+
 // ==================== Machine Status ====================
 
 /**
@@ -389,7 +921,7 @@ export async function getPricing(): Promise<any> {
  * @param machine_id - ID ของเครื่อง (default: 'main')
  * @returns ข้อมูลสถานะเครื่อง
  */
-export async function getMachineStatus(machine_id: string = 'main'): Promise<any> {
+export async function getMachineStatus(machine_id: string = 'main'): Promise<MachineStatus | null> {
   try {
     const { data, error } = await supabase
       .from('machine_status')
@@ -404,9 +936,56 @@ export async function getMachineStatus(machine_id: string = 'main'): Promise<any
       throw error
     }
 
-    return data
+    return data as MachineStatus
   } catch (error) {
     console.error('❌ Error fetching machine status:', error)
+    throw error
+  }
+}
+
+/**
+ * อัปเดตสถานะของเครื่อง (Admin only)
+ * @param machine_id - ID ของเครื่อง
+ * @param status - สถานะใหม่ (online, offline, maintenance)
+ * @param data - ข้อมูลเพิ่มเติม
+ * @returns ข้อมูลสถานะที่อัปเดต
+ */
+export async function updateMachineStatus(
+  machine_id: string,
+  status: 'online' | 'offline' | 'maintenance',
+  data?: Partial<MachineStatus>
+): Promise<MachineStatus> {
+  try {
+    const updateData: any = {
+      status,
+      last_heartbeat: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }
+
+    if (data) {
+      Object.assign(updateData, data)
+    }
+
+    const { data: result, error } = await supabaseAdmin
+      .from('machine_status')
+      .update(updateData)
+      .eq('machine_id', machine_id)
+      .select()
+      .single()
+
+    if (error) {
+      throw error
+    }
+
+    // บันทึก activity log
+    await logActivity(null, 'machine_status_updated', {
+      machine_id,
+      new_status: status
+    }).catch(err => console.warn('⚠️ Failed to log activity:', err))
+
+    return result as MachineStatus
+  } catch (error) {
+    console.error('❌ Error updating machine status:', error)
     throw error
   }
 }
@@ -448,6 +1027,77 @@ export async function getBottleCounts(machine_id: string = 'main'): Promise<{
     }
   } catch (error) {
     console.error('❌ Error fetching bottle counts:', error)
+    throw error
+  }
+}
+
+/**
+ * อัปเดตจำนวนขวดแต่ละประเภท (Admin only)
+ * @param machine_id - ID ของเครื่อง
+ * @param counts - object ของจำนวนขวด
+ * @returns ข้อมูลสถานะเครื่องที่อัปเดต
+ */
+export async function updateBottleCounts(
+  machine_id: string,
+  counts: { glass?: number; plastic?: number; can?: number }
+): Promise<MachineStatus> {
+  try {
+    const updateData: any = {
+      updated_at: new Date().toISOString()
+    }
+
+    if (counts.glass !== undefined) updateData.glass_count = counts.glass
+    if (counts.plastic !== undefined) updateData.plastic_count = counts.plastic
+    if (counts.can !== undefined) updateData.can_count = counts.can
+
+    const { data, error } = await supabaseAdmin
+      .from('machine_status')
+      .update(updateData)
+      .eq('machine_id', machine_id)
+      .select()
+      .single()
+
+    if (error) {
+      throw error
+    }
+
+    return data as MachineStatus
+  } catch (error) {
+    console.error('❌ Error updating bottle counts:', error)
+    throw error
+  }
+}
+
+/**
+ * ดึงสถิติเครื่อง
+ * @param machine_id - ID ของเครื่อง
+ * @returns object ของสถิติ
+ */
+export async function getMachineStats(machine_id: string = 'main'): Promise<any> {
+  try {
+    const machineStatus = await getMachineStatus(machine_id)
+    const bottleCounts = await getBottleCounts(machine_id)
+
+    if (!machineStatus) {
+      return null
+    }
+
+    return {
+      machine_id,
+      status: machineStatus.status,
+      cpu_temp: machineStatus.cpu_temp,
+      storage_used: machineStatus.storage_used,
+      bottle_counts: bottleCounts,
+      last_updated: machineStatus.updated_at,
+      is_online: machineStatus.status === 'online',
+      health: {
+        temp: machineStatus.cpu_temp < 80 ? 'good' : 'warning',
+        storage: machineStatus.storage_used < 90 ? 'good' : 'warning',
+        bottles: bottleCounts.total < machineStatus.max_bottles ? 'good' : 'warning'
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error fetching machine stats:', error)
     throw error
   }
 }
